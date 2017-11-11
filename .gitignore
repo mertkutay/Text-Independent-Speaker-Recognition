@@ -2,3 +2,5 @@ __pycache__
 *.DS_Store
 /.idea/workspace.xml
 2003_nist_sre
+test.wav
+test.txt
