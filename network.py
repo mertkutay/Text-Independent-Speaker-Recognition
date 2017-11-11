@@ -1,75 +1,71 @@
 import numpy as np
 import random
+import matplotlib.pyplot as plt
 
 
 class Network(object):
 
-    def __init__(self, input_size, hidden_size, output_size):
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.biases = []
-        self.biases.append(np.random.randn(hidden_size, 1))
-        self.biases.append(np.random.randn(output_size, 1))
-        self.weights = []
-        self.weights.append(np.random.randn(hidden_size, input_size))
-        self.weights.append(np.random.randn(output_size, hidden_size))
+    def __init__(self, sizes):
+        self.sizes = sizes
+        self.num_layers = len(sizes)
+        self.biases = [np.random.randn(b, 1) for b in sizes[1:]]
+        self.weights = [np.random.randn(w1, w2) for w1, w2 in zip(sizes[1:], sizes[:-1])]
 
-    def forward(self, x):
-        y = sigmoid(np.dot(self.weights[0], x) + self.biases[0])
-        y = sigmoid(np.dot(self.weights[1], y) + self.biases[1])
-        return y
+    def forward(self, a):
+        for w, b in zip(self.weights, self.biases):
+            a = sigmoid(np.dot(w, a) + b)
+        return a
 
-    def train(self, train_data, num_epoch, batch_size, learning, valid_data=None):
-        for i in range(num_epoch):
+    def train(self, train_data, epochs=10, batch_size=1, learning=1, valid_data=None):
+        for i in range(epochs):
             random.shuffle(train_data)
-            for j in range(int(len(train_data)/batch_size)):
-                self.update_params(train_data[j: j+batch_size], learning)
-            accuracy = ''
-            if len(valid_data) > 0:
-                accuracy = '{}%'.format(self.test(valid_data)*100)
+            for j in range(int(np.ceil(len(train_data)/batch_size))):
+                self.update_params(train_data[j*batch_size: j*batch_size+batch_size], learning)
+            accuracy = 'Training Accuracy: {:.2f}%'.format(self.evaluate(train_data)*100)
+            if valid_data:
+                accuracy = accuracy + ', Validation Accuracy: {:.2f}%'.format(self.evaluate(valid_data)*100)
             print('Epoch {}. {}'.format(i, accuracy))
 
     def update_params(self, batch, learning):
-        gradient_w0, gradient_w1, gradient_b0, gradient_b1 = self.back_propagation(batch)
-        self.weights[0] = self.weights[0] - learning * gradient_w0
-        self.weights[1] = self.weights[1] - learning * gradient_w1
-        self.biases[0] = self.biases[0] - learning * gradient_b0
-        self.biases[1] = self.biases[1] - learning * gradient_b1
+        gradient_w, gradient_b = self.back_propagation(batch)
+        self.weights = [w - learning * g_w / len(batch) for w, g_w in zip(self.weights, gradient_w)]
+        self.biases = [b - learning * g_b / len(batch) for b, g_b in zip(self.biases, gradient_b)]
 
     def back_propagation(self, batch):
-        gradient_w0 = np.zeros(self.weights[0].shape)
-        gradient_w1 = np.zeros(self.weights[1].shape)
-        gradient_b0 = np.zeros(self.biases[0].shape)
-        gradient_b1 = np.zeros(self.biases[1].shape)
+        gradient_w = [np.zeros(w.shape) for w in self.weights]
+        gradient_b = [np.zeros(b.shape) for b in self.biases]
 
         for x, y in batch:
-            x = np.reshape(x, (len(x), 1))
-            y = np.reshape(y, (len(y), 1))
             a = [x]
-            z = [np.dot(self.weights[0], x) + self.biases[0]]
-            a.append(sigmoid(z[0]))
-            z.append(np.dot(self.weights[1], a[1]) + self.biases[1])
-            a.append(sigmoid(z[1]))
+            z = []
+            for w, b in zip(self.weights, self.biases):
+                z.append(np.dot(w, a[-1]) + b)
+                a.append(sigmoid(z[-1]))
 
-            delta1 = (a[2] - y) * sigmoid_prime(z[1])
-            gradient_w1 += np.dot(delta1, a[1].transpose())
-            gradient_b1 += delta1
+            delta = (a[-1] - y) * sigmoid_prime(z[-1])
+            gradient_w[-1] += np.dot(delta, a[-2].transpose())
+            gradient_b[-1] += delta
 
-            delta2 = np.dot(self.weights[1].transpose(), delta1) * sigmoid_prime(z[0])
-            gradient_w0 += np.dot(delta2, a[0].transpose())
-            gradient_b0 += delta2
+            for i in range(-2, -self.num_layers, -1):
+                delta = np.dot(self.weights[i+1].transpose(), delta) * sigmoid_prime(z[i])
+                gradient_w[i] += np.dot(delta, a[i-1].transpose())
+                gradient_b[i] += delta
 
-        return gradient_w0, gradient_w1, gradient_b0, gradient_b1
+        return gradient_w, gradient_b
 
-    def test(self, test_data):
-        correct_results = 0
+    def evaluate(self, test_data):
+        if self.sizes[-1] == 1:
+            return np.sum([y == np.around(self.forward(x)) for x, y in test_data]) / len(test_data)
+        else:
+            return np.sum([y[np.argmax(self.forward(x))] == 1 for x, y in test_data]) / len(test_data)
+
+    def plot_results(self, test_data, file_name=None):
         for x, y in test_data:
-            x = np.reshape(x, (len(x), 1))
-            y = np.reshape(y, (len(y), 1))
-            if y[np.argmax(self.forward(x))] == 1:
-                correct_results += 1
-        return correct_results/len(test_data)
+            plt.scatter(x[0], x[1], c='r' if np.around(self.forward(x)) == 1 else 'g', marker='.')
+        if file_name is None:
+            plt.show()
+        else:
+            plt.savefig(file_name)
 
 
 def sigmoid(z):
