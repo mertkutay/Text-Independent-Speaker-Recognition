@@ -17,7 +17,7 @@ def train_on_iris():
     test_data = data[120:]
 
     net = Network([4, 16, 3])
-    net.train(train_data, epochs=250, batch_size=120, learning=1, valid_data=test_data)
+    net.train(train_data, epochs=250, batch_size=120, learning=1, regularization=0.1, valid_data=test_data)
 
 
 def train_on_xor():
@@ -33,13 +33,12 @@ def train_on_xor():
     x2 = np.reshape(x2, (6400, 1))
     noisy_input = [np.append(a1, a2) for a1, a2 in zip(x1, x2)]
     noisy_input = np.reshape(noisy_input, (6400, 2, 1))
-    noisy_target = [inp[0] > 0 > inp[1] or inp[0] < 0 < inp[1] for inp in noisy_input]
+    noisy_target = [(inp[0] > 0 > inp[1])-0 or (inp[0] < 0 < inp[1])-0 for inp in noisy_input]
     test_data = list(zip(noisy_input, noisy_target))
 
-    for i in range(12):
-        net = Network([2, 16, 1])
-        net.train(train_data, epochs=250, batch_size=4, learning=1)
-        net.plot_results(test_data, 'fig{}.png'.format(i))
+    net = Network([2, 16, 1])
+    net.train(train_data, epochs=250, batch_size=4, learning=0.5, regularization=0.01, valid_data=test_data)
+    net.plot_results(test_data, 'fig.png')
 
 
 train_on_xor()

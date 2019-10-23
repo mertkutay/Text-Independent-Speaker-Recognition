@@ -1,46 +1,95 @@
 import numpy as np
 from scipy import fftpack
 from scipy.io import wavfile
+import os
 
 
 def mfcc(file):
     rate, sig = wavfile.read(file)
+    # sig = sig / np.amax(sig)
     sig = pre_emphasis(sig, 0.97)
+    # sig = speech_segmentation(sig)
+    # if len(sig) < 200:
+    #     return None
     frames = frame_signal(sig, rate, 0.025, 0.01)
     psd_frames = power_spectrum(frames, 512)
-    energies = fbank_energies(psd_frames, rate, 20)
-    feats = dist_dct(energies)
+    energies = np.sum(psd_frames, axis=1)
+    segmented = energies > np.mean(energies) / 100
+    psd_frames = psd_frames[segmented]
+    energies = energies[segmented]
+    # energies = np.where(energies == 0, np.finfo(float).eps, energies)
+    bank_energies = fbank_energies(psd_frames, rate, 26, 512)
+    feats = fftpack.dct(bank_energies, type=2, norm='ortho')[:, :13]
+    # feats = dist_dct(bank_energies)
     feats = lifter(feats, 22)
-    feats = normalize(feats, 6)
-    # tot_energies = (np.log(np.sum(psd_frames, axis=1)))
-    # feats[:, 0] = tot_energies
+    feats[:, 0] = np.log(energies)
     return feats
 
 
 def dmfcc(file):
     m = mfcc(file)
-    dm = delta(m)
-    return np.concatenate((m, dm), axis=1)
+    # if m is None:
+    #     return None
+    dm = delta(m, 2)
+    feats = normalize(np.concatenate((m, dm), axis=1), 6)
+    return feats
 
 
 def ddmfcc(file):
-    m = mfcc(file)
-    dm = delta(m)
-    ddm = delta(dm)
-    return np.concatenate((m, dm, ddm), axis=1)
+    m = normalize(mfcc(file), 6)
+    # if m is None:
+    #     return None
+    dm = delta(m, 2)
+    ddm = delta(dm, 2)
+    feats = np.concatenate((m, dm, ddm), axis=1)
+    return feats
 
 
 def pre_emphasis(sig, coeff):
-    return np.append(sig[0], sig[1:]-coeff*sig[:-1])
+    return np.append(sig[0], sig[1:] - coeff * sig[:-1])
+
+
+def speech_segmentation(sig):
+    u = np.absolute(sig)
+    s = np.zeros_like(u)
+    n = np.zeros_like(u)
+    tn = np.zeros_like(u)
+    seg = np.zeros_like(u)
+    b_s = 0.9992
+    b_n = 0.9922
+    b_t = 0.999975
+    t_s = 2.0
+    t_n = 1.414
+    t_min = 0.01
+    for k in range(1, len(u)-1):
+        if s[k] > u[k]:
+            s[k] = u[k]
+        else:
+            s[k] = (1 - b_s) * u[k] + b_s * s[k-1]
+        if n[k] > u[k]:
+            n[k] = u[k]
+        else:
+            n[k] = (1 - b_n) * u[k] + b_n * n[k]
+        if tn[k] > n[k]:
+            tn[k] = (1 - b_t) * n[k] + b_t * tn[k]
+        else:
+            tn[k] = n[k]
+        if s[k] > t_s * tn[k] + t_min:
+            seg[k] = 1
+        elif s[k] < t_n * tn[k] + t_min:
+            seg[k] = 0
+        else:
+            seg[k] = seg[k - 1]
+    return sig[seg == 1]
 
 
 def frame_signal(sig, rate, frame_length, frame_step):
     length = int(frame_length * rate)
     step = int(frame_step * rate)
-    num_frames = int(len(sig) / step)
-    sig = np.concatenate((sig, np.zeros(length - len(sig) % step)))
+    num_frames = int((len(sig) - 200) / step) + 1
+    sig = sig[: len(sig) - ((len(sig) - 200) % step)]
     frames = np.empty((num_frames, length))
-    for i in range(len(frames)):
+    for i in range(num_frames):
         frames[i] = sig[i * step: i * step + length]
     return frames * np.hamming(length)
 
@@ -50,18 +99,18 @@ def power_spectrum(frames, nfft):
     return (np.absolute(fft_frames) ** 2) / nfft
 
 
-def mel_fbanks(rate, num_ceps):
-    mels = np.linspace(hz_mel(0), hz_mel(rate/2), num_ceps+4)
-    bins = ((512+1)*mel_hz(mels)/rate).astype(int)
-    fbanks = np.zeros((len(bins)-2, bins[-1]-bins[0]+1))
+def mel_fbanks(rate, num_banks, nfft):
+    mels = np.linspace(hz_mel(0), hz_mel(rate/2), num_banks+2)
+    bins = ((nfft+1)*mel_hz(mels)/rate).astype(int)
+    fbanks = np.zeros((len(bins) - 2, nfft//2 + 1))
     for i in range(len(fbanks)):
         fbanks[i][bins[i]: bins[i+1]] = [(k-bins[i])/(bins[i+1]-bins[i]) for k in range(bins[i], bins[i+1])]
         fbanks[i][bins[i+1]: bins[i+2]] = [(bins[i+2]-k)/(bins[i+2]-bins[i+1]) for k in range(bins[i+1], bins[i+2])]
     return fbanks
 
 
-def fbank_energies(psd_frames, rate, num_ceps):
-    fbanks = mel_fbanks(rate, num_ceps)
+def fbank_energies(psd_frames, rate, num_banks, nfft):
+    fbanks = mel_fbanks(rate, num_banks, nfft)
     energies = np.dot(psd_frames, fbanks.T)
     energies = np.where(energies == 0, np.finfo(float).eps, energies)
     return np.log(energies)
@@ -69,7 +118,7 @@ def fbank_energies(psd_frames, rate, num_ceps):
 
 def dist_dct(energies):
     p = int(np.size(energies, 1)/2)
-    feats1 = fftpack.dct(energies[:, 0:p], type=2, norm='ortho')
+    feats1 = fftpack.dct(energies[:, :p], type=2, norm='ortho')
     feats2 = fftpack.dct(energies[:, p:], type=2, norm='ortho')
     feats = np.concatenate((feats1[:, 1:p], feats2[:, 1:p]), axis=1)
     return feats
@@ -94,11 +143,12 @@ def normalize(feats, window):
     return feats
 
 
-def delta(feats):
+def delta(feats, window):
+    denominator = 2 * sum([i ** 2 for i in range(1, window + 1)])
     delta_feats = np.empty_like(feats)
-    padded_feats = np.pad(feats, ((2, 2), (0, 0)), mode='edge')
+    padded_feats = np.pad(feats, ((window, window), (0, 0)), mode='edge')
     for i in range(len(delta_feats)):
-        delta_feats[i] = np.dot(np.arange(-2, 3), padded_feats[i:i+5]) / 10
+        delta_feats[i] = np.dot(np.arange(-window, window + 1), padded_feats[i: i + 2 * window + 1]) / denominator
     return delta_feats
 
 
